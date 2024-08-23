@@ -1,0 +1,195 @@
+import os
+import re
+import subprocess
+import platform
+import pwd
+
+def command_run(command):
+    try:
+        output = subprocess.check_output(command, shell=True, text=True).strip()
+        return output
+    except subprocess.CalledProcessError:
+        return "Everything Failed!"
+
+print("-" * 40)
+print("Lets Start Vulnerability Check!")
+print("-" * 40)
+
+sshd_service = command_run("ps -ef | grep sshd")
+
+if bool(sshd_service):
+    sshd_service_alive = True
+    print("1. SSHD is working!")
+    print("-" * 40)
+else:
+    print("1. SSHD is not working!")
+    print("-" * 40)
+
+telnet_service = command_run("ps -ef | grep telnet")
+
+if bool(telnet_service):
+    sshd_service_alive = True
+    print("2. Telent is working!")
+    print("-" * 40)
+else:
+    print("2. Telent is not working!")
+    print("-" * 40)
+
+Remote_Permit_Root_Login = command_run("grep -i '^#PermitRootLogin' /etc/ssh/sshd_config")
+
+if bool(Remote_Permit_Root_Login):
+    Remote_Permit_Root_Login = True
+    print("3. Remote Root Login is not working!")
+    print("-" * 40)
+else:
+    print("3. Remote Root Login is working!")
+    print("-" * 40)
+
+#Password Complexity Checking
+REQUIREMENTS = {
+        'lcredit': -1,
+        'ucredit': -1,
+        'dcredit': -1,
+        'ocredit': -1,
+        'minlen': 8,
+        'difok': 10
+}
+def meets_requirements(password, requirements):
+
+    if len(password) < requirements['minlen']:
+        return False
+
+    lcount = ucount = dcount = ocount = 0
+
+    for char in password:
+        if char.islower():
+            Icount += 1
+        elif char.isupper():
+            ucount += 1
+        elif char.isdigit():
+            dcount += 1
+        elif re.match(r'[!@#$%^&*()_+{}:;"\'<>,.?/\\`~]', char):
+            ocount +=1
+
+    if lcount < abs(requirements['lcredit']):
+        return False
+    if ucount < abs(requirements['ucredit']):
+        return False
+    if dcount < abs(requirements['dcredit']):
+        return False
+    if ocount < abs(requirements['ocredit']):
+        return False
+
+    return True
+
+def get_shadow_passwords():
+
+    shadow_passwords = {}
+
+    try:
+        with open('/etc/shadow', 'r') as f:
+            for line in f:
+                parts = line.strip().split(':')
+                if len(parts) >= 2:
+                    username, encrypted_password = parts[0], parts[1]
+                    shadow_passwords[username] = encrypted_password
+    except IOError as e:
+        print(f"File cannot be read!")
+    return shadow_passwords
+
+def check_password_complexity():
+
+    shadow_passwords = get_shadow_passwords()
+    if not shadow_passwords:
+        print("{username}: there is no information!")
+        return
+
+    for username, encrypted_password in shadow_passwords.items():
+        if encrypted_password == '':
+            print(f"{username}: there is no password!")
+            continue
+
+    for username, encrypted_password in shadow_passwords.items():
+        if meets_requirements(encrypted_password, REQUIREMENTS):
+            print(f"{username}: OK")
+        else:
+            print(f"{username}: NO")
+
+print("4. Checking Password is Complexity!")
+check_password_complexity()
+print("-" * 40)
+
+#1-3 password attempt check
+PAM_PATHS = {
+        'ubuntu': '/etc/pam.d/common-auth',
+        'debian': '/etc/pam.d/common-auth',
+        'fedora': '/etc/pam.d/common-auth'
+        }
+
+def detect_os():
+
+    try:
+        os_name = platform.system()
+        if os_name == 'Linux':
+            try:
+                with open('/etc/os-release', 'r') as f:
+                    content = f.read().lower()
+                    if 'ubuntu' in content:
+                        return 'ubuntu'
+                    elif 'debian' in content:
+                        return 'debian'
+                    elif 'fedora' in content:
+                        return 'fedora'
+
+            except IOError as e:
+                print(f"Cannot read OS release file")
+                return None
+        else:
+            return None
+    except Exception as e:
+        print(f"error detecting os")
+        return None
+
+def check_account_lock():
+    os_distribution = detect_os()
+    if os_distribution in PAM_PATHS:
+        pam_path = PAM_PATHS[os_distribution]
+        try:
+            with open(pam_path, 'r') as f:
+                for line in f:
+                    if "pam_tally2.so" in line or "pam_faillock.so" in line:
+                        match = re.search(r"deny=(\d+)", line)
+                        if match:
+                            deny_value = int(match.group(1))
+                            print(f"{pam_path} account lock is {deny_value}")
+                            return deny_value
+                        print(f"{pam_path} account lock is 0")
+                        return None
+        except IOError as e:
+            print(f"{pam_path} can't open the file: {e}")
+            return None
+    else:
+        print("unsported os")
+        return None
+
+check_account_lock()
+print("-" * 40)
+
+#Checking who can use su
+def check_su_users():
+    su_users = []
+    for user in pwd.getpwall():
+        if user.pw_shell in ['/bin/bash', '/bin/sh', '/bin/zsh']:
+            su_users.append(user.pw_name)
+
+    return su_users
+
+su_users = check_su_users()
+print("6. Who can use su Command?")
+for user in su_users:
+    print(user)
+print("-" * 40)
+
+
+
+
